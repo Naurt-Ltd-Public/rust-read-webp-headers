@@ -1,41 +1,29 @@
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
 };
 
 const FILEPATH: &'static str = "images/naurt_phone.webp";
 
-/// A WebP header contains the string "RIFF", the filesize in bytes, and the string "WEBP".
+const EXTENDED_CHUNK_TYPE: &'static str = "VP8X";
+
 #[derive(Debug)]
 pub struct WebpHeader {
+    file_header: WebpFileHeader,
+    chunk_header: ChunkHeader,
+}
+
+#[derive(Debug)]
+pub struct WebpFileHeader {
     riff: String,
     file_size: u32,
     webp: String,
-    chunk_type: String,
-    chunk_header: ExtenderChunkHeader,
 }
-
-#[derive(Debug)]
-pub struct ExtenderChunkHeader {
-    icc_profile: bool,
-    alpha: bool,
-    exif_metadata: bool,
-    xmp_metadata: bool,
-    animation: bool,
-    width: u32,
-    height: u32,
-}
-
-// Source: https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification
-// Source: https://developers.google.com/speed/webp/docs/riff_container
-
-impl WebpHeader {
-    fn new_from_buf_reader<R>(reader: &mut R) -> Self
+impl WebpFileHeader {
+    pub fn new_from_buf_reader<R>(reader: &mut R) -> Self
     where
         R: Read,
     {
-        // WebP header is 12 bytes. 4 for RIFF, 4 for file size, 4 for WebP.
-
         let mut four_byte_buffer = [0; 4];
 
         reader.read(&mut four_byte_buffer).unwrap();
@@ -56,17 +44,44 @@ impl WebpHeader {
 
         let webp = String::from_utf8(four_byte_buffer.to_vec()).unwrap();
 
-        // The chunk header is 8 bytes. First 4 should contain the header type. 'VP8 ', 'VP8L' or 'VP8X'
-        // TODO: Does nect 4 bytes have the size in??
-        let mut eight_byte_buffer = [0; 8];
+        return Self {
+            riff,
+            file_size,
+            webp,
+        };
+    }
+}
 
-        reader.read(&mut eight_byte_buffer).unwrap();
+#[derive(Debug)]
+pub enum ChunkHeader {
+    Extended(ExtendedChunkHeader),
+}
 
-        let chunk_type = String::from_utf8(eight_byte_buffer[0..4].to_vec()).unwrap();
+impl ChunkHeader {
+    pub fn chunk_type(&self) -> &'static str {
+        match self {
+            ChunkHeader::Extended(_) => EXTENDED_CHUNK_TYPE,
+        }
+    }
+}
 
-        // reader.read(&mut four_byte_buffer).unwrap();
-        // println!("Next four bytes: {:?}", four_byte_buffer);
-        // This one is slightly different. We want to extract the individual bits form our four bytes.
+#[derive(Debug)]
+pub struct ExtendedChunkHeader {
+    icc_profile: bool,
+    alpha: bool,
+    exif_metadata: bool,
+    xmp_metadata: bool,
+    animation: bool,
+    width: u32,
+    height: u32,
+}
+
+impl ExtendedChunkHeader {
+    pub fn new_from_buf_reader<R>(reader: &mut R) -> Self
+    where
+        R: Read,
+    {
+        let mut four_byte_buffer = [0; 4];
 
         reader.read(&mut four_byte_buffer).unwrap();
 
@@ -114,7 +129,7 @@ impl WebpHeader {
             | (three_byte_buffer[2] as u32) << 16)
             + 1;
 
-        let chunk_header = ExtenderChunkHeader {
+        return Self {
             icc_profile,
             alpha,
             exif_metadata,
@@ -123,12 +138,38 @@ impl WebpHeader {
             width,
             height,
         };
+    }
+}
+
+// Source: https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification
+// Source: https://developers.google.com/speed/webp/docs/riff_container
+
+impl WebpHeader {
+    fn new_from_buf_reader<R>(reader: &mut R) -> Self
+    where
+        R: Read,
+    {
+        // WebP header is 12 bytes. 4 for RIFF, 4 for file size, 4 for WebP.
+
+        let file_header = WebpFileHeader::new_from_buf_reader(reader);
+
+        // The chunk header is 8 bytes. First 4 should contain the header type. 'VP8 ', 'VP8L' or 'VP8X'
+        // TODO: Does nect 4 bytes have the size in??
+        let mut eight_byte_buffer = [0; 8];
+
+        reader.read(&mut eight_byte_buffer).unwrap();
+
+        let chunk_type = String::from_utf8(eight_byte_buffer[0..4].to_vec()).unwrap();
+
+        let chunk_header = match chunk_type.as_str() {
+            EXTENDED_CHUNK_TYPE => {
+                ChunkHeader::Extended(ExtendedChunkHeader::new_from_buf_reader(reader))
+            }
+            _ => todo!("Other versions have not yet been implemented"),
+        };
 
         return Self {
-            riff,
-            file_size,
-            webp,
-            chunk_type,
+            file_header,
             chunk_header,
         };
     }
@@ -141,64 +182,4 @@ fn main() {
     let header = WebpHeader::new_from_buf_reader(&mut reader);
 
     println!("Header: {:?}", header);
-}
-
-fn basic_read_and_print() {
-    let file = File::open(FILEPATH).unwrap();
-
-    let mut reader = BufReader::new(file);
-
-    let mut four_byte_buffer = [0; 4];
-
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!("Header: {:?}", four_byte_buffer);
-
-    let my_string = String::from_utf8(four_byte_buffer.to_vec().to_ascii_uppercase()).unwrap();
-
-    println!("RIFF Starting string {}", my_string);
-
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!("File size bytes: {:?}", four_byte_buffer);
-
-    // Little endian
-    println!(
-        "File size in bytes: {}",
-        (four_byte_buffer[0] as u32) << 0
-            | (four_byte_buffer[1] as u32) << 8
-            | (four_byte_buffer[2] as u32) << 16
-            | (four_byte_buffer[3] as u32) << 24
-    );
-
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!(
-        "WEBP String: {:?}",
-        String::from_utf8(four_byte_buffer.to_vec().to_ascii_uppercase()).unwrap()
-    );
-
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    // This last piece varies based on the format. 'VP8 'for simple lossy, 'VP8L' for lossless
-    println!(
-        "VP8 space: {:?}",
-        String::from_utf8(four_byte_buffer.to_vec().to_ascii_uppercase()).unwrap()
-    );
-
-    // Read in the first chunk of data - this contains a header which has height x width.
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!("Bytes in stream: {:?}", four_byte_buffer);
-
-    let mut single_byte_buffer = [0; 1];
-
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!("Single buffer: {:?}", single_byte_buffer);
-
-    // Read in the first chunk of data - this contains a header which has height x width.
-    reader.read(&mut four_byte_buffer).unwrap();
-
-    println!("Size and stuff in stream: {:?}", four_byte_buffer);
 }
