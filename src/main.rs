@@ -12,13 +12,58 @@ pub struct WebpHeader {
     file_header: WebpFileHeader,
     chunk_header: ChunkHeader,
 }
-
 #[derive(Debug)]
 pub struct WebpFileHeader {
     riff: String,
     file_size: u32,
     webp: String,
 }
+
+#[derive(Debug)]
+pub enum ChunkHeader {
+    Extended(ExtendedChunkHeader),
+}
+
+#[derive(Debug)]
+pub struct ExtendedChunkHeader {
+    icc_profile: bool,
+    alpha: bool,
+    exif_metadata: bool,
+    xmp_metadata: bool,
+    animation: bool,
+    width: u32,
+    height: u32,
+}
+
+impl WebpHeader {
+    fn new_from_buf_reader<R>(reader: &mut R) -> Self
+    where
+        R: Read,
+    {
+        // WebP header is 12 bytes. 4 for RIFF, 4 for file size, 4 for WebP.
+        let file_header = WebpFileHeader::new_from_buf_reader(reader);
+
+        // The chunk header is 8 bytes. First 4 should contain the header type. 'VP8 ', 'VP8L', 'VP8X' etc.
+        let mut eight_byte_buffer = [0; 8];
+
+        reader.read(&mut eight_byte_buffer).unwrap();
+
+        let chunk_type = String::from_utf8(eight_byte_buffer[0..4].to_vec()).unwrap();
+
+        let chunk_header = match chunk_type.as_str() {
+            EXTENDED_CHUNK_TYPE => {
+                ChunkHeader::Extended(ExtendedChunkHeader::new_from_buf_reader(reader))
+            }
+            _ => todo!("Other chunk types have not yet been implemented"),
+        };
+
+        return Self {
+            file_header,
+            chunk_header,
+        };
+    }
+}
+
 impl WebpFileHeader {
     pub fn new_from_buf_reader<R>(reader: &mut R) -> Self
     where
@@ -52,28 +97,12 @@ impl WebpFileHeader {
     }
 }
 
-#[derive(Debug)]
-pub enum ChunkHeader {
-    Extended(ExtendedChunkHeader),
-}
-
 impl ChunkHeader {
     pub fn chunk_type(&self) -> &'static str {
         match self {
             ChunkHeader::Extended(_) => EXTENDED_CHUNK_TYPE,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct ExtendedChunkHeader {
-    icc_profile: bool,
-    alpha: bool,
-    exif_metadata: bool,
-    xmp_metadata: bool,
-    animation: bool,
-    width: u32,
-    height: u32,
 }
 
 impl ExtendedChunkHeader {
@@ -85,6 +114,7 @@ impl ExtendedChunkHeader {
 
         reader.read(&mut four_byte_buffer).unwrap();
 
+        // Little endian encoded, so bits are reversed.
         // First two bits are ignored. Reserved.
 
         // ICC profile is the third bit, so we shift by 3. This is still within our first byte.
@@ -109,7 +139,7 @@ impl ExtendedChunkHeader {
 
         // This is the first byte finished as the last bit is reserved.
 
-        // The next 24 bits are reserved and just 0. Making up the rest of the 4 bytes.
+        // The next 24 bits are reserved and just 0, making up the rest of the 4 bytes.
 
         // The width and height to come are the next 6 bytes. So let's read in three at a time now as they are 24 bit.
 
@@ -143,37 +173,6 @@ impl ExtendedChunkHeader {
 
 // Source: https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification
 // Source: https://developers.google.com/speed/webp/docs/riff_container
-
-impl WebpHeader {
-    fn new_from_buf_reader<R>(reader: &mut R) -> Self
-    where
-        R: Read,
-    {
-        // WebP header is 12 bytes. 4 for RIFF, 4 for file size, 4 for WebP.
-
-        let file_header = WebpFileHeader::new_from_buf_reader(reader);
-
-        // The chunk header is 8 bytes. First 4 should contain the header type. 'VP8 ', 'VP8L' or 'VP8X'
-        // TODO: Does nect 4 bytes have the size in??
-        let mut eight_byte_buffer = [0; 8];
-
-        reader.read(&mut eight_byte_buffer).unwrap();
-
-        let chunk_type = String::from_utf8(eight_byte_buffer[0..4].to_vec()).unwrap();
-
-        let chunk_header = match chunk_type.as_str() {
-            EXTENDED_CHUNK_TYPE => {
-                ChunkHeader::Extended(ExtendedChunkHeader::new_from_buf_reader(reader))
-            }
-            _ => todo!("Other versions have not yet been implemented"),
-        };
-
-        return Self {
-            file_header,
-            chunk_header,
-        };
-    }
-}
 fn main() {
     let file = File::open(FILEPATH).unwrap();
 
